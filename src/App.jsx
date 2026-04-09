@@ -1,8 +1,30 @@
 import { useState, useEffect, useRef } from "react";
 
-const KEYS = { handoffs: "cp_handoffs", events: "cp_events", messages: "cp_messages", schedule: "cp_schedule", children: "cp_children" };
-const load = async (k, f) => { try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : f; } catch { return f; } };
-const save = async (k, v) => { try { await window.storage.set(k, JSON.stringify(v)); } catch {} };
+// ── Replace with your deployed Apps Script Web App URL ───────────────────────
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxoFv0g19mOQMYCYXBpj_Rgv0LRo9TScfe8YIDga9_8Kfa8LKawV_jPk_YoRwf9HMElNg/exec";
+
+// Screenshots are base64 and too large for Sheets — kept in localStorage by record id
+const lsGetScreenshots = (res) => { try { return JSON.parse(localStorage.getItem(`ss_${res}`) || "{}"); } catch { return {}; } };
+const lsSaveScreenshots = (res, records) => { const m = {}; records.forEach(r => { if (r.screenshots?.length) m[r.id] = r.screenshots; }); localStorage.setItem(`ss_${res}`, JSON.stringify(m)); };
+const mergeScreenshots = (records, res) => { const m = lsGetScreenshots(res); return records.map(r => ({ ...r, screenshots: m[r.id] || [] })); };
+const stripScreenshots = (records) => records.map(({ screenshots, ...rest }) => rest);
+
+const loadAll = async () => {
+  try {
+    const res = await fetch(`${SCRIPT_URL}?action=getAll`);
+    return await res.json();
+  } catch { return null; }
+};
+
+const saveResource = async (resource, data) => {
+  if (resource !== "children") lsSaveScreenshots(resource, data);
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      body: JSON.stringify({ action: "replace", resource, data: resource === "children" ? data : stripScreenshots(data) })
+    });
+  } catch {}
+};
 
 const HANDOFF_STATUS = ["On time", "Early", "Late", "Withheld", "Other"];
 const EVENT_TYPES = ["Medical", "School", "Activity", "Other"];
@@ -419,11 +441,14 @@ export default function App() {
 
   useEffect(() => {
     (async () => {
-      setHandoffs(await load(KEYS.handoffs, []));
-      setEvents(await load(KEYS.events, []));
-      setMessages(await load(KEYS.messages, []));
-      setSchedule(await load(KEYS.schedule, []));
-      setChildren(await load(KEYS.children, []));
+      const all = await loadAll();
+      if (all && !all.error) {
+        setHandoffs(mergeScreenshots(all.handoffs || [], "handoffs"));
+        setEvents(mergeScreenshots(all.events || [], "events"));
+        setMessages(mergeScreenshots(all.messages || [], "messages"));
+        setSchedule(all.schedule || []);
+        setChildren(all.children || []);
+      }
       setLoaded(true);
     })();
   }, []);
@@ -432,19 +457,19 @@ export default function App() {
 
   const handleAdd = (type, date) => { setSelectedDay(null); setAddForm({ type, date }); };
 
-  const saveHandoff = async (form) => { const u = [{ ...form, id: Date.now() }, ...handoffs]; setHandoffs(u); await save(KEYS.handoffs, u); setAddForm(null); };
-  const saveEvent = async (form) => { const u = [{ ...form, id: Date.now() }, ...events]; setEvents(u); await save(KEYS.events, u); setAddForm(null); };
-  const saveMessage = async (form) => { const u = [{ ...form, id: Date.now() }, ...messages]; setMessages(u); await save(KEYS.messages, u); setAddForm(null); };
-  const saveSchedule = async (form) => { const u = [...schedule, { ...form, id: Date.now() }]; setSchedule(u); await save(KEYS.schedule, u); setAddForm(null); };
+  const saveHandoff = async (form) => { const u = [{ ...form, id: Date.now() }, ...handoffs]; setHandoffs(u); await saveResource("handoffs", u); setAddForm(null); };
+  const saveEvent = async (form) => { const u = [{ ...form, id: Date.now() }, ...events]; setEvents(u); await saveResource("events", u); setAddForm(null); };
+  const saveMessage = async (form) => { const u = [{ ...form, id: Date.now() }, ...messages]; setMessages(u); await saveResource("messages", u); setAddForm(null); };
+  const saveSchedule = async (form) => { const u = [...schedule, { ...form, id: Date.now() }]; setSchedule(u); await saveResource("schedule", u); setAddForm(null); };
 
   const handleDelete = async (type, id) => {
-    if (type === "handoff") { const u = handoffs.filter(x => x.id !== id); setHandoffs(u); await save(KEYS.handoffs, u); }
-    if (type === "event") { const u = events.filter(x => x.id !== id); setEvents(u); await save(KEYS.events, u); }
-    if (type === "message") { const u = messages.filter(x => x.id !== id); setMessages(u); await save(KEYS.messages, u); }
+    if (type === "handoff") { const u = handoffs.filter(x => x.id !== id); setHandoffs(u); await saveResource("handoffs", u); }
+    if (type === "event") { const u = events.filter(x => x.id !== id); setEvents(u); await saveResource("events", u); }
+    if (type === "message") { const u = messages.filter(x => x.id !== id); setMessages(u); await saveResource("messages", u); }
   };
 
-  const addChild = async (val) => { if (!val?.trim()) return; const u = [...children, val.trim()]; setChildren(u); await save(KEYS.children, u); };
-  const removeChild = async (c) => { const u = children.filter(x => x !== c); setChildren(u); await save(KEYS.children, u); };
+  const addChild = async (val) => { if (!val?.trim()) return; const u = [...children, val.trim()]; setChildren(u); await saveResource("children", u); };
+  const removeChild = async (c) => { const u = children.filter(x => x !== c); setChildren(u); await saveResource("children", u); };
 
   if (!loaded) return <div style={{ padding: "2rem", color: "var(--color-text-secondary)", fontSize: 14 }}>Loading...</div>;
 
